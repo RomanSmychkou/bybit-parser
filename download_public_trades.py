@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
@@ -17,6 +19,7 @@ from download_progress import DownloadProgress
 
 
 BASE_URL = "https://public.bybit.com/spot/{symbol}/"
+DATE_RE = re.compile(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) "
     "Gecko/20100101 Firefox/128.0"
@@ -77,6 +80,28 @@ def extract_files(symbol: str, timeout: float) -> list[tuple[str, str]]:
     return result
 
 
+def filter_files(
+    files: list[tuple[str, str]],
+    start: date | None,
+    end: date | None,
+) -> list[tuple[str, str]]:
+    if start is None and end is None:
+        return files
+
+    filtered: list[tuple[str, str]] = []
+    for filename, url in files:
+        match = DATE_RE.search(filename)
+        if not match:
+            continue
+        file_date = date.fromisoformat(match.group(1))
+        if start is not None and file_date < start:
+            continue
+        if end is not None and file_date > end:
+            continue
+        filtered.append((filename, url))
+    return filtered
+
+
 async def download_files(
     executor: ThreadPoolExecutor,
     jobs: list[tuple[str, str, Path]],
@@ -114,7 +139,8 @@ async def main(args: argparse.Namespace) -> int:
                 files = await asyncio.get_running_loop().run_in_executor(
                     executor, extract_files, symbol, args.timeout
                 )
-                print(f"{symbol}: found {len(files)} files")
+                files = filter_files(files, args.start, args.end)
+                print(f"{symbol}: selected {len(files)} files")
             except Exception as error:
                 print(f"{symbol}: cannot read directory: {error}", file=sys.stderr)
                 continue
@@ -129,6 +155,15 @@ async def main(args: argparse.Namespace) -> int:
     finally:
         executor.shutdown(wait=True)
     return 0
+
+
+def parse_date(value: str) -> date:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"invalid date {value!r}; expected YYYY-MM-DD"
+        ) from error
 
 
 def parse_args() -> argparse.Namespace:
@@ -149,11 +184,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout", type=float, default=60.0, help="Per-request timeout in seconds"
     )
+    parser.add_argument(
+        "--start",
+        type=parse_date,
+        help="First date to download, inclusive (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--end",
+        type=parse_date,
+        help="Last date to download, inclusive (YYYY-MM-DD)",
+    )
     args = parser.parse_args()
     if args.concurrency < 1:
         parser.error("--concurrency must be at least 1")
     if args.timeout <= 0:
         parser.error("--timeout must be greater than 0")
+    if args.start and args.end and args.start > args.end:
+        parser.error("--start must not be later than --end")
     return args
 
 
