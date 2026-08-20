@@ -166,7 +166,11 @@ async def main(args: argparse.Namespace) -> int:
                     (
                         filename,
                         url,
-                        Path(args.output) / symbol / marker / filename,
+                        (
+                            Path(args.output) / filename
+                            if args.flat_output
+                            else Path(args.output) / symbol / marker / filename
+                        ),
                     )
                     for filename, url in discovered[symbol]
                     if marker_lower in filename.lower()
@@ -202,6 +206,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "-o", "--output", default=".", help="Output directory (default: current directory)"
+    )
+    parser.add_argument(
+        "--flat-output",
+        action="store_true",
+        help="Write files directly into --output instead of symbol subdirectories",
     )
     parser.add_argument(
         "--timeout", type=float, default=60.0, help="Per-request timeout in seconds"
